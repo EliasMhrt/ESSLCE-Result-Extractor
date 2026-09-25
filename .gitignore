@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller / build output
+build/
+dist/
+installer/
+*.manifest
+
+# Runtime state and logs
+debug.log
+gui_state.json
+*.flag
+
+# Selenium driver cache
+downloaded_files/
+
+# Student data and results - never commit these (contains real PII)
+students.xlsx
+results.xlsx
+progress.csv
+raw_sample.json
+*.xlsx
+*.csv
