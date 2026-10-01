@@ -51,9 +51,18 @@ from seleniumbase import SB
 # CONFIGURATION - edit these to match your school's setup
 # ---------------------------------------------------------------------------
 
-INPUT_FILE = "students.xlsx"          # students list (admission no + first name)
-OUTPUT_FILE = "results.xlsx"          # where the results go
-PROGRESS_FILE = "progress.csv"        # live progress/backup file
+# Every runtime file lives next to the app, not in whatever directory the
+# process happened to be started from. The launcher uses the same BASE_DIR, so
+# pause.flag / stop.flag / progress.csv are always found by both sides - even
+# when the frozen EXE is launched from a desktop shortcut.
+_IS_FROZEN = getattr(sys, "frozen", False)
+BASE_DIR = os.path.dirname(os.path.abspath(sys.executable if _IS_FROZEN else __file__))
+
+INPUT_FILE = os.path.join(BASE_DIR, "students.xlsx")   # students list (admission no + first name)
+OUTPUT_FILE = os.path.join(BASE_DIR, "results.xlsx")   # where the results go
+PROGRESS_FILE = os.path.join(BASE_DIR, "progress.csv")  # live progress/backup file
+DEBUG_FILE = os.path.join(BASE_DIR, "debug.log")        # request/response history
+RAW_SAMPLE_FILE = os.path.join(BASE_DIR, "raw_sample.json")  # first API response
 
 SITE_URL = "https://result.eaes.et/"
 API_BASE = "https://api.eaes.et/api/v1"
@@ -70,8 +79,8 @@ PAUSE_MAX = 40                         # longer pause max seconds
 # Pause / Stop cooperation with the GUI launcher. The launcher creates
 # pause.flag to ask for a pause, deletes it to resume, and creates stop.flag
 # to ask for a clean stop (progress is always flushed before exiting).
-PAUSE_FILE = "pause.flag"
-STOP_FILE = "stop.flag"
+PAUSE_FILE = os.path.join(BASE_DIR, "pause.flag")
+STOP_FILE = os.path.join(BASE_DIR, "stop.flag")
 NETWORK_FAIL_LIMIT = 5                 # consecutive network errors before auto-pausing
 NETWORK_RETRY_MIN = 5                  # seconds between connectivity checks while auto-paused
 
@@ -242,7 +251,7 @@ def _api_get(url):
 
 
 def _log_debug(message):
-    with open("debug.log", "a", encoding="utf-8") as fh:
+    with open(DEBUG_FILE, "a", encoding="utf-8") as fh:
         fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {message}\n")
 
 
@@ -451,7 +460,16 @@ def parse_result(data):
 # ---------------------------------------------------------------------------
 
 def _row_key(row):
-    return (str(row.get("Admission No") or "") + "|" + str(row.get("First Name") or "")).strip()
+    """Stable identity for a student, used to skip already-collected students.
+
+    The admission number is normalised on both sides, because the input file and
+    the API do not agree on the width: the file may hold 65001 while the portal
+    reports it zero-padded, or the other way round. Without normalising here, a
+    resumed run would never match and would re-fetch the whole batch.
+    """
+    admission = normalize_admission(row.get("Admission No") or "")
+    name = str(row.get("First Name") or "").strip().upper()
+    return f"{admission}|{name}".strip()
 
 
 def _migrate_row(row):
@@ -609,7 +627,7 @@ def main():
             first_name = str(student[fn_col]).strip().upper()
             if not admission or not first_name:
                 continue
-            key = f"{admission}|{first_name}"
+            key = _row_key({"Admission No": admission, "First Name": first_name})
             if key in done_keys:
                 skipped += 1
                 continue
@@ -694,8 +712,8 @@ def main():
                     continue
                 # success
                 try:
-                    if SAVE_RAW_SAMPLE and not os.path.exists("raw_sample.json"):
-                        with open("raw_sample.json", "w", encoding="utf-8") as fh:
+                    if SAVE_RAW_SAMPLE and not os.path.exists(RAW_SAMPLE_FILE):
+                        with open(RAW_SAMPLE_FILE, "w", encoding="utf-8") as fh:
                             json.dump(data, fh, ensure_ascii=False, indent=2)
                         print("    (raw response saved to raw_sample.json - check that all subjects are there)")
                     result_row = parse_result(data)
