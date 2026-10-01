@@ -1,5 +1,5 @@
 #define MyAppName "ESSLCE Result Extractor"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Oryares"
 #define MyAppExeName "ESSLCE-Result-Extractor.exe"
 
@@ -16,6 +16,7 @@ OutputBaseFilename=ESSLCE-Result-Extractor-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=app.ico
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}

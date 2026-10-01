@@ -144,6 +144,8 @@ class LauncherApp:
         self.running = False
         self.log_queue = queue.Queue()
         self.force_stop_at = None
+        self._wrap_widgets = []
+        self._vbar_packed = True
 
         self.total = 0
         self.done_base = 0
@@ -153,7 +155,7 @@ class LauncherApp:
         root.title("ESSLCE Result Extractor - Oryares")
         _apply_icon(root)
         root.geometry("960x900")
-        root.minsize(880, 820)
+        root.minsize(720, 480)
         root.configure(bg=BG)
         try:
             scaling = ctypes.windll.user32.GetDpiForWindow(root.winfo_id()) / 96.0
@@ -207,7 +209,23 @@ class LauncherApp:
 
     def build(self):
         self._restore_geometry()
-        shell = ttk.Frame(self.root, padding=18, style="Shell.TFrame")
+        outer = ttk.Frame(self.root, style="Shell.TFrame")
+        outer.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(outer, bg=BG, highlightthickness=0, bd=0,
+                                takefocus=True)
+        self.vbar = ttk.Scrollbar(outer, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vbar.set)
+        self.vbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        shell = ttk.Frame(self.canvas, padding=18, style="Shell.TFrame")
+        self._shell_window = self.canvas.create_window((0, 0), window=shell, anchor="nw")
+        shell.bind("<Configure>", self._on_shell_resize)
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.root.bind_all(seq, self._on_mousewheel, add="+")
+        for seq, cmd in (("<Prior>", -1), ("<Next>", 1), ("<Up>", -1), ("<Down>", 1),
+                         ("<Home>", "home"), ("<End>", "end")):
+            self.root.bind_all(seq, lambda e, c=cmd: self._on_keyscroll(c), add="+")
         self.root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 13))
         try:
             ttk.Style(self.root).configure("Shell.TFrame", background=BG)
@@ -229,7 +247,6 @@ class LauncherApp:
         self._actions_card(shell)
         self._log_card(shell)
 
-        shell.pack(fill="both", expand=True)
         self.root.update_idletasks()
         try:
             self.root.state("zoomed")
@@ -246,7 +263,87 @@ class LauncherApp:
         self.root.bind("<Control-p>", lambda e: self._toggle_pause())
         self.root.bind("<Escape>", lambda e: self._stop())
 
+        self.root.update_idletasks()
+        self._update_wraplength(self.canvas.winfo_width())
+        self._sync_scroll()
         self.root.after(120, self._drain_log)
+
+    def _on_shell_resize(self, _event):
+        self._sync_scroll()
+
+    def _on_canvas_resize(self, event):
+        self.canvas.itemconfigure(self._shell_window, width=event.width)
+        self._update_wraplength(event.width)
+        self._sync_scroll()
+
+    def _sync_scroll(self):
+        """Keep the scrollregion in sync and hide the bar when everything fits."""
+        bbox = self.canvas.bbox("all")
+        if bbox is None:
+            self._show_scrollbar(False)
+            return
+        self.canvas.configure(scrollregion=bbox)
+        self._show_scrollbar(bbox[3] - bbox[1] > self.canvas.winfo_height() + 2)
+
+    def _show_scrollbar(self, needed):
+        # Track our own flag: winfo_ismapped() is 0 for everything before the
+        # window is first shown, so it cannot be trusted to mean "is packed".
+        needed = bool(needed)
+        if needed == self._vbar_packed:
+            return
+        if needed:
+            self.vbar.pack(side="right", fill="y")
+        else:
+            self.vbar.pack_forget()
+        self._vbar_packed = needed
+
+    def _register_wrap(self, widget, inset):
+        """Make a label re-wrap to the viewport instead of a hardcoded width."""
+        self._wrap_widgets.append((widget, inset))
+        return widget
+
+    def _update_wraplength(self, width):
+        for widget, inset in self._wrap_widgets:
+            target = max(240, width - inset)
+            match = re.search(r"-?\d+", str(widget.cget("wraplength") or "0"))
+            current = int(match.group()) if match else 0
+            if abs(current - target) > 4:
+                widget.configure(wraplength=target)
+
+    _SCROLL_EXEMPT = ("Text", "Listbox", "Entry", "TEntry", "TCombobox", "TSpinbox", "Spinbox")
+
+    def _under_pointer(self, event):
+        widget = getattr(event, "widget", None)
+        if widget is None:
+            widget = self.root.winfo_containing(event.x_root, event.y_root)
+        while widget is not None:
+            if widget.winfo_class() in self._SCROLL_EXEMPT:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+    def _on_mousewheel(self, event):
+        if self._under_pointer(event):
+            return
+        num = getattr(event, "num", None)
+        if num == 4:
+            self.canvas.yview_scroll(-3, "units")
+        elif num == 5:
+            self.canvas.yview_scroll(3, "units")
+        elif event.delta:
+            self.canvas.yview_scroll(-int(event.delta / 120) * 3, "units")
+
+    def _on_keyscroll(self, direction):
+        widget = self.root.focus_get()
+        if widget is not None and widget.winfo_class() in self._SCROLL_EXEMPT:
+            return
+        if direction == "home":
+            self.canvas.yview_moveto(0.0)
+        elif direction == "end":
+            self.canvas.yview_moveto(1.0)
+        else:
+            page = max(1, self.canvas.winfo_height() // 24)
+            self.canvas.yview_scroll(direction * page, "units")
 
     def _students_card(self, parent):
         card = ttk.Frame(parent, style="Card.TFrame", padding=14)
@@ -279,16 +376,16 @@ class LauncherApp:
 
         row = tk.Frame(card, bg=CARD)
         row.pack(fill="x", pady=(10, 0))
-        self.students_path = tk.Label(
+        self.students_path = self._register_wrap(tk.Label(
             row, text="No file selected", bg=CARD, fg=MUTED, font=("Segoe UI", 12),
-            anchor="w", wraplength=560)
+            anchor="w", wraplength=560), 174)
         self.students_path.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="Browse", style="Small.TButton",
                    command=self._browse_students).pack(side="right")
 
-        self.file_check = tk.Label(
+        self.file_check = self._register_wrap(tk.Label(
             card, text="", bg=CARD, fg=MUTED, font=("Segoe UI", 12),
-            anchor="w", wraplength=700)
+            anchor="w", wraplength=700), 72)
         self.file_check.pack(fill="x", pady=(8, 0))
 
     def _output_card(self, parent):
@@ -316,9 +413,9 @@ class LauncherApp:
 
         row = tk.Frame(card, bg=CARD)
         row.pack(fill="x", pady=(10, 0))
-        self.output_path_lbl = tk.Label(
+        self.output_path_lbl = self._register_wrap(tk.Label(
             row, text="", bg=CARD, fg=ACCENT, font=("Segoe UI", 12, "bold"),
-            anchor="w", wraplength=560)
+            anchor="w", wraplength=560), 174)
         self.output_path_lbl.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="Browse", style="Small.TButton",
                    command=self._browse_output).pack(side="right")
@@ -350,9 +447,9 @@ class LauncherApp:
             info, text="", bg=CARD, fg=MUTED, font=("Segoe UI", 12), anchor="e")
         self.eta_lbl.pack(side="right")
 
-        self.progress_hint = tk.Label(
+        self.progress_hint = self._register_wrap(tk.Label(
             card, text="Start a run to see progress here.", bg=CARD, fg=MUTED,
-            font=("Segoe UI", 12), anchor="w")
+            font=("Segoe UI", 12), anchor="w", wraplength=700), 72)
         self.progress_hint.pack(fill="x", pady=(4, 0))
 
     def _actions_card(self, parent):
@@ -378,7 +475,7 @@ class LauncherApp:
 
     def _log_card(self, parent):
         card = ttk.Frame(parent, style="Card.TFrame", padding=10)
-        card.pack(fill="both", expand=True)
+        card.pack(fill="x")
 
         self.log = tk.Text(
             card, bg="#020617", fg="#cbd5e1", insertbackground=FG,
